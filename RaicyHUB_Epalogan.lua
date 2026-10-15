@@ -696,9 +696,65 @@ task.spawn(function()
 end)
 
 --------------------------------------------------------------------------------
--- 3b. AUTO-BUY FURNITURE (Legendary / Heaven / Epic priority)
+-- 3b. AUTO-BUY FURNITURE (Heaven / Legendary / Epic / Rare priority)
 --------------------------------------------------------------------------------
-local RARE_PRIORITIES = {"HEAVEN", "LEGENDARY"}
+-- Rarity keywords to look for (highest priority first). Uses find() so
+-- labels like "[HEAVEN]", "⭐ Legendary", "RARITY: EPIC" all match.
+local FURNITURE_RARITIES = {"HEAVEN", "LEGENDARY"}
+
+-- Helper: walk up the GUI hierarchy to find the "card" frame that contains
+-- both the rarity label AND a BUY button. Checks up to 6 ancestors.
+local function findCardWithBuyButton(startInstance)
+    local card = startInstance.Parent
+    for _ = 1, 6 do
+        if not card or card:IsA("ScreenGui") then break end
+        for _, child in ipairs(card:GetDescendants()) do
+            if child:IsA("TextButton") or child:IsA("ImageButton") then
+                local btnText = (child.Text or ""):upper():gsub("%s+", "")
+                if btnText == "BUY" or btnText == "PURCHASE" or btnText == "BUYITEM" then
+                    return child
+                end
+            end
+        end
+        card = card.Parent
+    end
+    return nil
+end
+
+-- Helper: after clicking BUY, look for confirmation dialogs and click them
+local function clickConfirmationPopups()
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not playerGui then return end
+    for _ = 1, 5 do -- retry a few times to catch delayed popups
+        for _, gui in ipairs(playerGui:GetChildren()) do
+            if gui:IsA("ScreenGui") then
+                for _, desc in ipairs(gui:GetDescendants()) do
+                    if desc:IsA("TextButton") or desc:IsA("ImageButton") then
+                        local txt = (desc.Text or ""):upper():gsub("%s+", "")
+                        if txt == "CONFIRM" or txt == "YES" or txt == "OK"
+                            or txt == "BUY" or txt == "PURCHASE"
+                            or txt == "ACCEPT" or txt == "PROCEED" then
+                            pcall(function() desc:Activate() end)
+                            task.wait(0.15)
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.2)
+    end
+end
+
+-- Helper: detect if a text label contains a rarity keyword (fuzzy match)
+local function matchesRarity(text)
+    local upper = text:upper():gsub("%s+", " ")
+    for priority, rarity in ipairs(FURNITURE_RARITIES) do
+        if upper:find(rarity) then
+            return rarity, priority
+        end
+    end
+    return nil, 999
+end
 
 task.spawn(function()
     while Running do
@@ -710,44 +766,63 @@ task.spawn(function()
                 for _, gui in ipairs(playerGui:GetChildren()) do
                     if not gui:IsA("ScreenGui") then continue end
 
-                    -- Check if this is the Furniture Store
-                    local isFurnitureStore = false
+                    -- Check if this looks like a Furniture / Shop / Store GUI
+                    local isShop = false
                     for _, desc in ipairs(gui:GetDescendants()) do
-                        if desc:IsA("TextLabel") and desc.Text:upper():find("FURNITURE STORE") then
-                            isFurnitureStore = true
-                            break
+                        if desc:IsA("TextLabel") or desc:IsA("TextButton") then
+                            local t = (desc.Text or ""):upper()
+                            if t:find("FURNITURE") or t:find("SHOP") or t:find("STORE") then
+                                isShop = true
+                                break
+                            end
                         end
                     end
 
-                    if isFurnitureStore then
-                        -- Collect all item cards with their rarity
+                    if isShop then
+                        -- Phase 1: Collect all rarity labels and their best BUY buttons
+                        local buyTargets = {} -- {button, priority}
                         for _, desc in ipairs(gui:GetDescendants()) do
                             if desc:IsA("TextLabel") then
-                                local txt = desc.Text:upper()
-                                -- Check if this label shows a rare rarity
-                                for _, rarity in ipairs(RARE_PRIORITIES) do
-                                    if txt == rarity then
-                                        -- Found a rarity label! Look for BUY button in same parent frame
-                                        local card = desc.Parent
-                                        if card then
-                                            -- Walk up to find the item card container
-                                            for _ = 1, 3 do
-                                                if card then
-                                                    for _, child in ipairs(card:GetDescendants()) do
-                                                        if child:IsA("TextButton") then
-                                                            local btnText = child.Text:upper():gsub("%s+", "")
-                                                            -- Only click BUY, not SOLD OUT
-                                                            if btnText == "BUY" then
-                                                                pcall(function() child:Activate() end)
-                                                                task.wait(0.3)
-                                                            end
-                                                        end
-                                                    end
-                                                    card = card.Parent
-                                                end
-                                            end
+                                local rarity, priority = matchesRarity(desc.Text)
+                                if rarity then
+                                    local buyBtn = findCardWithBuyButton(desc)
+                                    if buyBtn then
+                                        -- Check it's not SOLD OUT or already bought
+                                        local btnText = (buyBtn.Text or ""):upper():gsub("%s+", "")
+                                        if btnText ~= "SOLDOUT" and btnText ~= "SOLD"
+                                            and btnText ~= "OWNED" and btnText ~= "MAXED"
+                                            and buyBtn.Visible ~= false then
+                                            table.insert(buyTargets, {btn = buyBtn, priority = priority, rarity = rarity})
                                         end
-                                        break
+                                    end
+                                end
+                            end
+                        end
+
+                        -- Sort by priority (Heaven first, then Legendary, etc.)
+                        table.sort(buyTargets, function(a, b) return a.priority < b.priority end)
+
+                        -- Phase 2: Click BUY on each target
+                        for _, target in ipairs(buyTargets) do
+                            pcall(function() target.btn:Activate() end)
+                            task.wait(0.4)
+                            -- Handle any confirmation popup
+                            clickConfirmationPopups()
+                            task.wait(0.3)
+                        end
+
+                        -- Phase 3: Also just click ALL visible BUY buttons in the shop
+                        -- as a fallback (in case rarity labels weren't found)
+                        if #buyTargets == 0 then
+                            for _, desc in ipairs(gui:GetDescendants()) do
+                                if (desc:IsA("TextButton") or desc:IsA("ImageButton")) then
+                                    local btnText = (desc.Text or ""):upper():gsub("%s+", "")
+                                    if (btnText == "BUY" or btnText == "PURCHASE")
+                                        and desc.Visible ~= false then
+                                        pcall(function() desc:Activate() end)
+                                        task.wait(0.3)
+                                        clickConfirmationPopups()
+                                        task.wait(0.2)
                                     end
                                 end
                             end
@@ -756,29 +831,42 @@ task.spawn(function()
                 end
             end)
 
-            -- Also try furniture buy remotes
+            -- Also try furniture buy remotes with many argument patterns
             if Remotes then
                 local furnitureItems = {
-                    -- Chairs (best first)
-                    "Demon Angel Chair", "King Chair", "Queen Chair",
-                    -- Tables (best first)
-                    "Angel Table", "Banana Leaf Table",
+                    -- Heaven rarity
+                    "Demon Angel Chair", "Angel Table", "Heaven Chair", "Heaven Table",
+                    "Divine Chair", "Divine Table", "Celestial Chair", "Celestial Table",
+                    -- Legendary rarity
+                    "King Chair", "Queen Chair", "King Table", "Queen Table",
+                    "Royal Chair", "Royal Table", "Gold Chair", "Gold Table",
+                    "Diamond Chair", "Diamond Table", "Crystal Chair", "Crystal Table",
+                    -- Epic rarity
+                    "Banana Leaf Table", "VIP Chair", "VIP Table",
+                    "Premium Chair", "Premium Table", "Deluxe Chair", "Deluxe Table",
+                    -- Rare rarity
+                    "Fancy Chair", "Fancy Table", "Elegant Chair", "Elegant Table",
                 }
                 for _, obj in ipairs(Remotes:GetDescendants()) do
                     if (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction"))
-                        and (obj.Name:lower():find("buy") or obj.Name:lower():find("purchase"))
-                        and obj.Name:lower():find("furniture") then
+                        and (obj.Name:lower():find("buy") or obj.Name:lower():find("purchase")) then
+                        -- Try each furniture item with multiple argument patterns
                         for _, item in ipairs(furnitureItems) do
                             pcall(function()
                                 if obj:IsA("RemoteEvent") then
                                     obj:FireServer(item)
+                                    obj:FireServer(item, 1)
+                                    obj:FireServer("Furniture", item)
+                                    obj:FireServer("furniture", item)
                                 else
                                     obj:InvokeServer(item)
+                                    obj:InvokeServer(item, 1)
+                                    obj:InvokeServer("Furniture", item)
+                                    obj:InvokeServer("furniture", item)
                                 end
                             end)
-                            task.wait(0.1)
+                            task.wait(0.08)
                         end
-                        break
                     end
                 end
             end
