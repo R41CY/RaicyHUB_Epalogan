@@ -1,4 +1,4 @@
-﻿-- RaicyHUB (encrypted)
+-- RaicyHUB (encrypted)
 -- github.com/R41CY/RaicyHUB_Epalogan
 local _ = (function()
 local _h = table.concat({
