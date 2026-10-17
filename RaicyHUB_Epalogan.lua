@@ -1,6 +1,6 @@
 --[[
     ================================================================================
-    RaicyHUB — Epalogan Tycoon Auto-Worker  (v2.2)
+    RaicyHUB — Epalogan Tycoon Auto-Worker  (v2.3)
     ================================================================================
     Features:
       1. Auto-Assign   — seats customers to tables via RemoteEvent
@@ -103,6 +103,58 @@ local function moveTo(targetPosition)
         root.CFrame = CFrame.new(targetPosition + Vector3.new(0, 1.8, 0))
     end
 end
+
+--------------------------------------------------------------------------------
+-- Plot Ownership — only interact with YOUR restaurant
+--------------------------------------------------------------------------------
+local _myPlot = nil   -- cached reference to our plot folder
+local _myPlotUserId = tostring(LocalPlayer.UserId)
+
+-- Find and cache our plot (called each loop iteration to handle respawns)
+local function getMyPlot()
+    -- Return cached if still valid
+    if _myPlot and _myPlot.Parent then return _myPlot end
+    _myPlot = nil
+    local plots = workspace:FindFirstChild("EpaloganPlots")
+    if not plots then return nil end
+    for _, plot in ipairs(plots:GetChildren()) do
+        if plot.Name:find(_myPlotUserId) then
+            _myPlot = plot
+            return _myPlot
+        end
+    end
+    return nil
+end
+
+-- Check if an instance is inside our plot
+local function isInsideMyPlot(instance)
+    local plot = getMyPlot()
+    if not plot then return false end
+    local check = instance
+    while check and check ~= workspace do
+        if check == plot then return true end
+        check = check.Parent
+    end
+    return false
+end
+
+-- Get all descendants of our plot only (instead of workspace)
+local function getMyPlotDescendants()
+    local plot = getMyPlot()
+    if not plot then return {} end
+    return plot:GetDescendants()
+end
+
+--------------------------------------------------------------------------------
+-- Go Home on startup (teleport to own restaurant)
+--------------------------------------------------------------------------------
+pcall(function()
+    local topNav = ReplicatedStorage:FindFirstChild("TopNavigationRemote")
+    if topNav then
+        topNav:FireServer("Home")
+        task.wait(1)
+    end
+end)
 
 --------------------------------------------------------------------------------
 -- Prompt Trigger
@@ -242,16 +294,16 @@ local function getFoodFromPrompt(prompt)
 end
 
 -- Read what a CUSTOMER wants by scanning the serve prompt area for order text
--- This does a WIDE scan: checks the table, the seat, nearby NPCs, bubbles
+-- Scoped to OUR plot only — won't read other players' customer orders
 local function getCustomerOrder(servePrompt)
     -- First try the prompt itself
     local food = getFoodFromPrompt(servePrompt)
     if food then return food end
 
-    -- Also scan nearby BillboardGuis in the same area (customer speech bubbles)
+    -- Also scan nearby BillboardGuis in OUR PLOT (customer speech bubbles)
     local promptPos = getPromptPosition(servePrompt)
     if promptPos then
-        for _, obj in ipairs(workspace:GetDescendants()) do
+        for _, obj in ipairs(getMyPlotDescendants()) do
             if obj:IsA("BillboardGui") and obj.Parent
                 and (obj.Parent:IsA("BasePart") or obj.Parent:IsA("Model")) then
                 local guiParent = obj.Parent
@@ -437,7 +489,7 @@ VerPill.Size = UDim2.new(0, 30, 0, 14)
 VerPill.Position = UDim2.new(0, 90, 0.5, -7)
 VerPill.BackgroundColor3 = C.accent
 VerPill.BackgroundTransparency = 0.15
-VerPill.Text = "v2.2"
+VerPill.Text = "v2.3"
 VerPill.TextColor3 = C.bg
 VerPill.TextSize = 8
 VerPill.Font = Enum.Font.GothamBold
@@ -918,11 +970,11 @@ task.spawn(function()
 
             if _phase == "pickup" then
                 -- ═══════ PICKUP PHASE ═══════
-                -- Build a set of what customers currently want (fresh scan)
+                -- Build a set of what customers currently want (OUR PLOT ONLY)
                 local wantedFoods = {}
                 local hasAnyServe = false
                 if Config.AutoServe then
-                    for _, obj in ipairs(workspace:GetDescendants()) do
+                    for _, obj in ipairs(getMyPlotDescendants()) do
                         if obj:IsA("ProximityPrompt") and obj.Enabled
                             and isServePrompt(obj) and not isOnCooldown(obj) then
                             hasAnyServe = true
@@ -934,8 +986,8 @@ task.spawn(function()
 
                 local pickedUp = false
                 if Config.AutoPickUp then
-                    -- 1) Try to pick up food that matches a waiting customer
-                    for _, obj in ipairs(workspace:GetDescendants()) do
+                    -- 1) Try to pick up food that matches a waiting customer (OUR PLOT)
+                    for _, obj in ipairs(getMyPlotDescendants()) do
                         if obj:IsA("ProximityPrompt") and obj.Enabled
                             and isPickupPrompt(obj) and not isOnCooldown(obj) then
                             local stationFood = getFoodFromPrompt(obj)
@@ -964,7 +1016,7 @@ task.spawn(function()
 
                     -- 2) Fallback: pick up any available food
                     if not pickedUp then
-                        for _, obj in ipairs(workspace:GetDescendants()) do
+                        for _, obj in ipairs(getMyPlotDescendants()) do
                             if obj:IsA("ProximityPrompt") and obj.Enabled
                                 and isPickupPrompt(obj) and not isOnCooldown(obj) then
                                 if isPromptStillValid(obj) then
@@ -1008,7 +1060,7 @@ task.spawn(function()
                 if Config.AutoServe then
                     -- 1) If we know what we're holding, find the matching customer
                     if _heldFood then
-                        for _, obj in ipairs(workspace:GetDescendants()) do
+                        for _, obj in ipairs(getMyPlotDescendants()) do
                             if obj:IsA("ProximityPrompt") and obj.Enabled
                                 and isServePrompt(obj) and not isOnCooldown(obj) then
                                 local order = getCustomerOrder(obj)
@@ -1036,7 +1088,7 @@ task.spawn(function()
 
                     -- 2) Fallback: serve ANY customer
                     if not served then
-                        for _, obj in ipairs(workspace:GetDescendants()) do
+                        for _, obj in ipairs(getMyPlotDescendants()) do
                             if obj:IsA("ProximityPrompt") and obj.Enabled
                                 and isServePrompt(obj) and not isOnCooldown(obj) then
                                 if isPromptStillValid(obj) then
@@ -1519,4 +1571,4 @@ task.spawn(function()
 end)
 
 --------------------------------------------------------------------------------
-print("[RaicyHUB v2.2] All systems active! 🔥")
+print("[RaicyHUB v2.3] All systems active! 🔥")
