@@ -1,6 +1,6 @@
 --[[
     ================================================================================
-    RaicyHUB — Epalogan Tycoon Auto-Worker  (v2.3)
+    RaicyHUB — Epalogan Tycoon Auto-Worker  (v2.3.1)
     ================================================================================
     Features:
       1. Auto-Assign   — seats customers to tables via RemoteEvent
@@ -105,28 +105,82 @@ local function moveTo(targetPosition)
 end
 
 --------------------------------------------------------------------------------
--- Plot Ownership — only interact with YOUR restaurant
+-- Plot Detection — works for OWNER and ADMINS
+-- Owner: matches plot by UserId
+-- Admin: finds the plot they're physically closest to
 --------------------------------------------------------------------------------
-local _myPlot = nil   -- cached reference to our plot folder
-local _myPlotUserId = tostring(LocalPlayer.UserId)
+local _myPlot = nil   -- cached reference to the working plot
 
--- Find and cache our plot (called each loop iteration to handle respawns)
-local function getMyPlot()
-    -- Return cached if still valid
-    if _myPlot and _myPlot.Parent then return _myPlot end
-    _myPlot = nil
-    local plots = workspace:FindFirstChild("EpaloganPlots")
-    if not plots then return nil end
-    for _, plot in ipairs(plots:GetChildren()) do
-        if plot.Name:find(_myPlotUserId) then
-            _myPlot = plot
-            return _myPlot
+-- Get the position of a plot (its center/pivot)
+local function getPlotPosition(plot)
+    -- Try PrimaryPart first
+    if plot:IsA("Model") and plot.PrimaryPart then
+        return plot.PrimaryPart.Position
+    end
+    -- Try GetPivot
+    local ok, pivot = pcall(function() return plot:GetPivot().Position end)
+    if ok and pivot then return pivot end
+    -- Fallback: find any BasePart inside and use its position
+    for _, desc in ipairs(plot:GetChildren()) do
+        if desc:IsA("BasePart") then return desc.Position end
+        if desc:IsA("Model") then
+            local ok2, p = pcall(function() return desc:GetPivot().Position end)
+            if ok2 and p then return p end
         end
     end
     return nil
 end
 
--- Check if an instance is inside our plot
+-- Find and cache the plot we should work in
+local function getMyPlot()
+    -- Return cached if still valid
+    if _myPlot and _myPlot.Parent then return _myPlot end
+    _myPlot = nil
+
+    local plots = workspace:FindFirstChild("EpaloganPlots")
+    if not plots then return nil end
+    local allPlots = plots:GetChildren()
+
+    -- Strategy 1: match by our UserId (we're the plot owner)
+    local myUserId = tostring(LocalPlayer.UserId)
+    for _, plot in ipairs(allPlots) do
+        if plot.Name:find(myUserId) then
+            _myPlot = plot
+            return _myPlot
+        end
+    end
+
+    -- Strategy 2: find the plot we're physically closest to (admin mode)
+    local root = getRootPart()
+    if root then
+        local myPos = root.Position
+        local bestPlot, bestDist = nil, math.huge
+        for _, plot in ipairs(allPlots) do
+            local plotPos = getPlotPosition(plot)
+            if plotPos then
+                local dist = (plotPos - myPos).Magnitude
+                if dist < bestDist then
+                    bestDist = dist
+                    bestPlot = plot
+                end
+            end
+        end
+        if bestPlot then
+            _myPlot = bestPlot
+            return _myPlot
+        end
+    end
+
+    -- Strategy 3: if only one plot exists, use it
+    if #allPlots == 1 then
+        _myPlot = allPlots[1]
+        return _myPlot
+    end
+
+    return nil
+end
+
+-- Check if an instance is inside our working plot
 local function isInsideMyPlot(instance)
     local plot = getMyPlot()
     if not plot then return false end
@@ -138,21 +192,21 @@ local function isInsideMyPlot(instance)
     return false
 end
 
--- Get all descendants of our plot only (instead of workspace)
+-- Get all descendants of our working plot only (instead of workspace)
 local function getMyPlotDescendants()
     local plot = getMyPlot()
     if not plot then return {} end
     return plot:GetDescendants()
 end
 
---------------------------------------------------------------------------------
--- Go Home on startup (teleport to own restaurant)
---------------------------------------------------------------------------------
-pcall(function()
-    local topNav = ReplicatedStorage:FindFirstChild("TopNavigationRemote")
-    if topNav then
-        topNav:FireServer("Home")
-        task.wait(1)
+-- Log which plot we're working in
+task.defer(function()
+    task.wait(2) -- give time for character to load
+    local plot = getMyPlot()
+    if plot then
+        print("[RaicyHUB] Working in plot: " .. plot.Name)
+    else
+        warn("[RaicyHUB] Could not find a plot! Make sure you're near a restaurant.")
     end
 end)
 
@@ -489,7 +543,7 @@ VerPill.Size = UDim2.new(0, 30, 0, 14)
 VerPill.Position = UDim2.new(0, 90, 0.5, -7)
 VerPill.BackgroundColor3 = C.accent
 VerPill.BackgroundTransparency = 0.15
-VerPill.Text = "v2.3"
+VerPill.Text = "v2.3.1"
 VerPill.TextColor3 = C.bg
 VerPill.TextSize = 8
 VerPill.Font = Enum.Font.GothamBold
@@ -831,10 +885,8 @@ end
 task.spawn(function()
     while Running do
         if Config.AutoAssign and CounterAssignCustomer then
-            local plots = workspace:FindFirstChild("EpaloganPlots")
-            if plots then
-                for _, plot in ipairs(plots:GetChildren()) do
-                    if plot.Name:find(tostring(LocalPlayer.UserId)) then
+            local plot = getMyPlot()
+            if plot then
                         -- Collect all table+seat combos with rarity scores
                         local assignments = {}
                         for _, child in ipairs(plot:GetDescendants()) do
@@ -897,8 +949,6 @@ task.spawn(function()
                                 task.wait(Config.SeatDelay)
                             end
                         end
-                    end
-                end
             end
         end
         task.wait(0.1)
@@ -1571,4 +1621,4 @@ task.spawn(function()
 end)
 
 --------------------------------------------------------------------------------
-print("[RaicyHUB v2.3] All systems active! 🔥")
+print("[RaicyHUB v2.3.1] All systems active! 🔥")
